@@ -1,4 +1,7 @@
+from dataclasses import field
+from typing import List, Literal, Optional, Union
 import numpy
+from periodictable.xsf import xray_wavelength
 from scipy.special import erf
 from scipy.interpolate import PchipInterpolator, CubicHermiteSpline, interpn
 from scipy.spatial.transform import Rotation
@@ -9,11 +12,30 @@ from copy import deepcopy
 from periodictable.fasta import xray_sld, D2O_SLD, H2O_SLD
 from molgroups import components as cmp
 
+from molgroups.serialization.define_schema import schema, field
+
 D2O_SLD *= 1e-6
 H2O_SLD *= 1e-6
 
-
+@schema(init=False)
 class nSLDObj:
+    bWrapping: bool = True
+    bConvolution: bool = False
+    bProtonExchange: bool = False
+    dSigmaConvolution: float = 1.0
+    iNumberOfConvPoints: int = 7
+    absorb: float = 0.0
+    z: float = 0.0
+    l: float = 0.0
+    vol: float = 0.0
+    nSL: int = 0
+    nf: float = 0
+    sigma: float = 0.0
+    flip: bool = False
+    bulknsld: Optional[float] = None
+    name: Optional[str] = None
+    xray_wavelength: Optional[float] = None
+    
     def __init__(self, name=None):
         self.bWrapping = True
         self.bConvolution = False
@@ -187,7 +209,7 @@ class nSLDObj:
 
         return aArea, anSL
 
-
+@schema(init=False, eq=False)
 class CompositenSLDObj(nSLDObj):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -237,9 +259,21 @@ class CompositenSLDObj(nSLDObj):
             rdict = g.fnWritePar2Dict(rdict, f"{cName}.{g.name}", z)
         return rdict
 
-
+@schema(init=False, eq=False)
 class Box2Err(nSLDObj):
-    def __init__(self, dz=20, dsigma1=2, dsigma2=2, dlength=10, dvolume=10, dnSL=0, dnumberfraction=1, name=None):
+    z: float
+    sigma1: float
+    sigma2: float
+    l: float
+    init_l: float
+    vol: float
+    nSL: int
+    nf: int
+    nSL2: Optional[int]
+    flip: bool
+    flipcenter: float
+
+    def __init__(self, dz=20, dsigma1=2, dsigma2=2, dlength=10.0, dvolume=10, dnSL=0, dnumberfraction=1, name=None):
         super().__init__(name=name)
         self.z = dz
         self.sigma1 = dsigma1
@@ -387,7 +421,7 @@ class Box2Err(nSLDObj):
 
         return rdict
 
-
+@schema(init=False, eq=False)
 class ComponentBox(Box2Err):
     """
     Box2Err from a components.Component object
@@ -398,16 +432,22 @@ class ComponentBox(Box2Err):
     The arguments molecule and diffmolecule can either be a single instance of Molecule or a list, but the same number
     of elements must be given each. If given as a list, an average length is calculated.
     """
-    def __init__(self, components=None, diffcomponents=None, xray_wavelength=None, **kwargs):
+    xray_wavelength: float
+    def __init__(self, 
+                    components: Union[List[cmp.Component], cmp.Component] = [],
+                    diffcomponents: Union[List[cmp.Component], cmp.Component] = [],
+                    xray_wavelength=None, **kwargs):
         if not isinstance(components, (list, tuple)):
             components = [components]
         if diffcomponents is not None and not isinstance(diffcomponents, (list, tuple)):
             diffcomponents = [diffcomponents]
+        
+        self.xray_wavelength = xray_wavelength
 
         dvolume = sum(m.cell_volume for m in components)
         dlength = sum(m.length for m in components) / float(len(components))
         nSL = sum(m.fnGetnSL(xray_wavelength) for m in components)
-        if diffcomponents is not None:
+        if diffcomponents is not None and len(diffcomponents) > 0:
             dvolume -= sum(m.cell_volume for m in diffcomponents)
             dlength -= sum(m.length for m in diffcomponents) / float(len(diffcomponents))
             nSL -= sum(m.fnGetnSL(xray_wavelength) for m in diffcomponents)
@@ -416,11 +456,24 @@ class ComponentBox(Box2Err):
         self.fnSetnSL(*nSL)
 
 
+@schema()
 class CompositeHeadgroup(CompositenSLDObj):
-    def __init__(self, name='headgroup', components=None, innerleaflet=False, xray_wavelength=None,
+    subgroups: List[nSLDObj]
+    xray_wavelength: float
+    sigma1: float
+    sigma2: float
+    components: List[cmp.Component]
+    flip: bool
+    rel_pos: float
+    l: float
+    init_l: float
+    z: float
+
+    def __init__(self, name='headgroup', components=None, flip=False, xray_wavelength=None,
                  sigma1=None, sigma2=None, rel_pos=None, length=None, position=None, num_frac=None, **kwargs):
         super().__init__(name=name, **kwargs)
-        self.flip = innerleaflet
+        print(self.subgroups)
+        self.flip = flip
         self.xray_wavelength = xray_wavelength
 
         if not isinstance(components, (list, tuple)):
@@ -566,9 +619,22 @@ class CompositeHeadgroup(CompositenSLDObj):
         return rdict
 
 
+@schema(eq=False)
 class BLM(CompositenSLDObj):
-    def __init__(self, inner_lipids=None, inner_lipid_nf=None, outer_lipids=None, outer_lipid_nf=None, lipids=None,
-                 lipid_nf=None, xray_wavelength=None, **kwargs):
+    inner_lipids: List[cmp.Lipid]
+    outer_lipids: List[cmp.Lipid]
+    inner_lipid_nf: List[float]
+    outer_lipid_nf: List[float]
+    xray_wavelength: float
+
+    def __init__(self, 
+                    inner_lipids: Optional[List[cmp.Lipid]]=None,
+                    inner_lipid_nf: Optional[List[float]]=None,
+                    outer_lipids: Optional[List[cmp.Lipid]]=None,
+                    outer_lipid_nf: Optional[List[float]]=None,
+                    lipids: Optional[List[cmp.Lipid]]=None,
+                    lipid_nf: Optional[List[float]]=None, 
+                    xray_wavelength=None, **kwargs):
         """ Free bilayer object. Requires:
             o lipids definition:
                 - lipids: list of components.Lipid objects. If set, creates a symmetric bilayer and overrides
@@ -610,12 +676,12 @@ class BLM(CompositenSLDObj):
         self.xray_wavelength = xray_wavelength
 
         # unpack lipids
-        h, nh, m, mm = self._unpack_lipids(inner_lipids, 'headgroup1', 'methylene1', 'methyl1', innerleaflet=True)
+        h, nh, m, mm = self._unpack_lipids(inner_lipids, 'headgroup1', 'methylene1', 'methyl1', flip=True)
         self.headgroups1 = h
         self.null_hg1 = nh
         self.methylenes1 = m
         self.methyls1 = mm
-        h, nh, m, mm = self._unpack_lipids(outer_lipids, 'headgroup2', 'methylene2', 'methyl2', innerleaflet=False)
+        h, nh, m, mm = self._unpack_lipids(outer_lipids, 'headgroup2', 'methylene2', 'methyl2', flip=False)
         self.headgroups2 = h
         self.null_hg2 = nh
         self.methylenes2 = m
@@ -624,7 +690,7 @@ class BLM(CompositenSLDObj):
         self.initial_hg1_lengths = numpy.array([hg1.l for hg1 in self.headgroups1])
         self.defect_hydrocarbon = Box2Err(name='defect_hc')
         self.defect_headgroup = Box2Err(name='defect_hg')
-        self.nf = 1.
+        self.nf = 1
         self.vf_bilayer = 1.0
         self.absorb = 0.
         self.l_lipid1 = 11.
@@ -798,7 +864,7 @@ class BLM(CompositenSLDObj):
 
         return vol_components, nsl_components
 
-    def _unpack_lipids(self, _lipids, hgprefix, methyleneprefix, methylprefix, innerleaflet=True):
+    def _unpack_lipids(self, _lipids, hgprefix, methyleneprefix, methylprefix, flip=True):
         """ Helper function for BLM classes that unpacks a lipid list into headgroup objects
             and lists of acyl chain and methyl volumes and nSLs. Creates the following attributes:
             o headgroups1: a list of inner leaflet headgroup objects
@@ -824,9 +890,11 @@ class BLM(CompositenSLDObj):
             if isinstance(lipid.headgroup, cmp.Component):
                 # populates nSL, nSL2, vol, and l
                 hg_obj = ComponentBox(name=hg_name, components=[lipid.headgroup], xray_wavelength=self.xray_wavelength)
-            elif isinstance(lipid.headgroup, list):
-                hg_obj = lipid.headgroup[0](name=hg_name, innerleaflet=innerleaflet,
-                                            xray_wavelength=self.xray_wavelength, **(lipid.headgroup[1]))
+            elif isinstance(lipid.headgroup, nSLDObj):
+                hg_obj = deepcopy(lipid.headgroup)
+                hg_obj.name = hg_name
+                hg_obj.xray_wavelength = self.xray_wavelength
+                hg_obj.flip = flip
             else:
                 raise TypeError('Lipid.hg must be a Headgroup object or a subclass of CompositenSLDObj')
 
@@ -921,7 +989,9 @@ class BLM(CompositenSLDObj):
         return rdict
 
 
+@schema(init=False)
 class ssBLM(BLM):
+    type: Literal['ssBLM']
     def __init__(self, inner_lipids=None, inner_lipid_nf=None, outer_lipids=None, outer_lipid_nf=None, lipids=None,
                  lipid_nf=None, xray_wavelength=None, **kwargs):
         """ Solid supported bilayer object. Requires:
@@ -1023,10 +1093,10 @@ class tBLM(BLM):
         self.tether_bme = Box2Err(name='tether_bme')
         self.tether_free = Box2Err(name='tether_free')
         self.tether_hg = Box2Err(name='tether_hg')
-        self.tether = cmp.Component(name='tether', formula=tether.tether.formula,
+        self.tether = cmp.Component(name='tether', formula_in=tether.tether.formula,
                                     cell_volume=tether.tether.cell_volume, xray_wavelength=xray_wavelength,
                                     length=self.l_tether)
-        self.tetherg = cmp.Component(name='tetherg', formula=tether.tetherg.formula,
+        self.tetherg = cmp.Component(name='tetherg', formula_in=tether.tetherg.formula,
                                      cell_volume=tether.tetherg.cell_volume, xray_wavelength=xray_wavelength,
                                      length=10.0)
         self.tether_methylene = ComponentBox(name='tether_methylene', components=tether.tails,

@@ -1,16 +1,32 @@
+from typing import List, Optional, Union
 import numpy
 from periodictable.fasta import Molecule, xray_sld
 # in formulas, use H[1] for exchangeable hydrogens, then Molecule.sld, Molecule.Dsld
 # to get limiting slds, or Molecule.D2Osld(D2O_fraction=??) to get arbitrary D2O fraction.
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from mol import nSLDObj
 
 
+from molgroups.serialization.define_schema import schema, field
+
+@schema(eq=False)
 class Component(Molecule):
+    name: Optional[str]
+    formula_in: str
+    cell_volume: float
+    length: float
+    xray_wavelength: Optional[float]
     # Subclasses Molecule to automatically store a component length for use later
     # and calculate total neutron scattering lengths
-    def __init__(self, length=9.575, xray_wavelength=None, **kwargs):
-        super().__init__(**kwargs)
+    def __init__(self, name, formula_in, cell_volume=0.0, length=9.575, xray_wavelength=None):
+        super().__init__(name, formula_in, cell_volume=cell_volume)
         self.length = length
         self.nSLs = self.fnGetnSL(xray_wavelength)
+        self.name = name
+        self.cell_volume = cell_volume
+        self.xray_wavelength = xray_wavelength
+        self.formula_in = formula_in
 
     def fnGetnSL(self, xray_wavelength=None):
         if xray_wavelength is None:
@@ -21,11 +37,19 @@ class Component(Molecule):
 
 # null components and molecules for use with bilayer species that do not have headgroups or methyls (e.g. cholesterol)
 null_molecule = Molecule(name=None, formula='', cell_volume=0.0)
-null_component = Component(name=None, formula='', cell_volume=0.0, length=9.575)
+null_component = Component(name=None, formula_in='', cell_volume=0.0, length=9.575)
 
-
+@schema(eq=False)
 class Lipid(object):
-    def __init__(self, headgroup, tails, methyls, name=None):
+    headgroup: Union[Component, 'nSLDObj']
+    tails: Component
+    methyls: Component
+
+    def __init__(self, 
+                    headgroup: Union[Component, 'nSLDObj'],
+                    tails: List[Component],
+                    methyls: List[Component],
+                    name=None):
         # hg = Component object with headgroup information or PC molgroups object
         # tails = List of component objects containing lipid tail information
         # methyls = List of methyl groups, one for each lipid tail; OR, a single group
@@ -40,7 +64,7 @@ class Lipid(object):
         tail_volume = sum([t.cell_volume for t in tails])
         tail_formula = ' '.join([str(t.formula) for t in tails])
         tail_length = sum([t.length for t in tails]) / n_tails
-        self.tails = Component(name='tails', formula=tail_formula, cell_volume=tail_volume, length=tail_length)
+        self.tails = Component(name='tails', formula_in=tail_formula, cell_volume=tail_volume, length=tail_length)
 
         # headgroup
         self.headgroup = headgroup if headgroup is not None else null_component
@@ -58,7 +82,7 @@ class Lipid(object):
         m_volume = sum([m.cell_volume for m in methyls])
         m_formula = ' '.join([str(m.formula) for m in methyls])
         m_length = sum([m.length for m in methyls]) / n_tails
-        self.methyls = Component(name='methyls', formula=m_formula, cell_volume=m_volume, length=m_length)
+        self.methyls = Component(name='methyls', formula_in=m_formula, cell_volume=m_volume, length=m_length)
 
         if name is not None:
             self.name = name
@@ -93,34 +117,34 @@ def AddMolecules(component_list, length=None):
     if length is None:
         return Molecule(name=total_name, formula=total_formula, cell_volume=total_cell_volume)
     else:
-        return Component(name=total_name, formula=total_formula, cell_volume=total_cell_volume, length=length)
+        return Component(name=total_name, formula_in=total_formula, cell_volume=total_cell_volume, length=length)
 
 
 # PC headgroup pieces
-choline = Component(name='choline', formula='C5 H13 N', cell_volume=120., length=5.1)
-phosphate = Component(name='phosphate', formula='PO4', cell_volume=54., length=3.86)
-carbonyl_glycerol = Component(name='carbonyl_glycerol', formula='C5 O4 H5', cell_volume=147., length=4.21)
+choline = Component(name='choline', formula_in='C5 H13 N', cell_volume=120., length=5.1)
+phosphate = Component(name='phosphate', formula_in='PO4', cell_volume=54., length=3.86)
+carbonyl_glycerol = Component(name='carbonyl_glycerol', formula_in='C5 O4 H5', cell_volume=147., length=4.21)
 
 # standard headgroups
-pc = Component(name='PC', formula='C10 H18 O8 N P', cell_volume=331.00, length=9.575)
-pe = Component(name='PE', formula='C7 H9 H[1]3 O8 N P', cell_volume=262., length=7.7)
-pg = Component(name='PG', formula='C8 H10 H[1]2 O10 P', cell_volume=240., length=7.8)
-ps = Component(name='PS', formula='C8 H8 H[1]3 N O10 P', cell_volume=280., length=8.1)
-pa = Component(name='PA', formula='C5 H5 H[1] O8 P', cell_volume=174., length=5.0)
-pi = Component(name='PI', formula='C11 H7 H[1]5 O13 P', cell_volume=370.7, length=10.7)
-pip2 = Component(name='PI(4,5)P2', formula='C11 H7 H[1]5 O19 P3', cell_volume=500., length=12.0)  # diff to molgroups.cc
-cardiolipin = Component(name='cardiolipin', formula='C13 H15 H[1] O17 P2', cell_volume=684.4, length=9.56)
+pc = Component(name='PC', formula_in='C10 H18 O8 N P', cell_volume=331.00, length=9.575)
+pe = Component(name='PE', formula_in='C7 H9 H[1]3 O8 N P', cell_volume=262., length=7.7)
+pg = Component(name='PG', formula_in='C8 H10 H[1]2 O10 P', cell_volume=240., length=7.8)
+ps = Component(name='PS', formula_in='C8 H8 H[1]3 N O10 P', cell_volume=280., length=8.1)
+pa = Component(name='PA', formula_in='C5 H5 H[1] O8 P', cell_volume=174., length=5.0)
+pi = Component(name='PI', formula_in='C11 H7 H[1]5 O13 P', cell_volume=370.7, length=10.7)
+pip2 = Component(name='PI(4,5)P2', formula_in='C11 H7 H[1]5 O19 P3', cell_volume=500., length=12.0)  # diff to molgroups.cc
+cardiolipin = Component(name='cardiolipin', formula_in='C13 H15 H[1] O17 P2', cell_volume=684.4, length=9.56)
 
 # standard acyl chains
-oleoyl = Component(name='oleoyl', formula='C17 H33', cell_volume=972./2.0, length=11.0)
-palmitoyl = Component(name='palmitoyl', formula='C15 H31', cell_volume=770./2.0, length=11.0)
-myristoyl = Component(name='myristoyl', formula='C13 H27', cell_volume=770./2.0, length=11.0)
-phytanoyl = Component(name='phytanoyl', formula='C19 H39', cell_volume=1095./2.0, length=11.0)
-cholesterol = Component(name='cholesterol', formula='C27 H45 H[1] O', cell_volume=630., length=11.0)
+oleoyl = Component(name='oleoyl', formula_in='C17 H33', cell_volume=972./2.0, length=11.0)
+palmitoyl = Component(name='palmitoyl', formula_in='C15 H31', cell_volume=770./2.0, length=11.0)
+myristoyl = Component(name='myristoyl', formula_in='C13 H27', cell_volume=770./2.0, length=11.0)
+phytanoyl = Component(name='phytanoyl', formula_in='C19 H39', cell_volume=1095./2.0, length=11.0)
+cholesterol = Component(name='cholesterol', formula_in='C27 H45 H[1] O', cell_volume=630., length=11.0)
 
 # methyl
-methyl = Component(name='methyl', formula='CH3', cell_volume=98.8/2.0, length=11.0)
-Dmethyl = Component(name='Dmethyl', formula='CD3', cell_volume=98.8/2.0, length=11.0)
+methyl = Component(name='methyl', formula_in='CH3', cell_volume=98.8/2.0, length=11.0)
+Dmethyl = Component(name='Dmethyl', formula_in='CD3', cell_volume=98.8/2.0, length=11.0)
 
 # Tether components
 SAc = Molecule(name='thiol acetate', formula='C2H3OS', cell_volume=117.0)
